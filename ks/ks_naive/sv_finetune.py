@@ -41,12 +41,12 @@ split4_shuffled = split4.shuffle(seed=SEED)
 
 # Split off the kept and excluded samples
 split1_kept = split1_shuffled.select(range(175, len(split1_shuffled)))
-split2_kept = split2_shuffled.select(range(175, len(split2_shuffled)))
+split2_kept = split2_shuffled.select(range(325, len(split2_shuffled)))
 split3_kept = split3_shuffled.select(range(325, len(split3_shuffled)))
 split4_kept = split4_shuffled.select(range(325, len(split4_shuffled)))
 
 split1_excluded = split1_shuffled.select(range(175))
-split2_excluded = split2_shuffled.select(range(175))
+split2_excluded = split2_shuffled.select(range(325))
 split3_excluded = split3_shuffled.select(range(325))
 split4_excluded = split4_shuffled.select(range(325))
 
@@ -66,10 +66,10 @@ test_indexes = {
 }
 
 # Save both to JSON
-with open("train_indexes_gaussian.json", "w") as f:
+with open("train_indexes_gaussian_equal_proportions.json", "w") as f:
     json.dump(train_indexes, f, indent=2)
 
-with open("test_indexes_3_gaussian.json", "w") as f:
+with open("test_indexes_gaussian_equal_proportions.json", "w") as f:
     json.dump(test_indexes, f, indent=2)
 
 print("✅ Saved training indexes to 'train_indexes.json'")
@@ -88,7 +88,8 @@ split3 = split3.add_column("source", ["Trigger"] * len(split3))
 split4 = split4.add_column("source", ["ContextAndTrigger"] * len(split4))
 
 # Fine-tuned model name
-save_model = '/home/rubencho/ks/ks_naive/gaussian_trigger_20_epochs'
+TRAINING_EPOCHS = 5
+save_model = f'/home/rubencho/ks/ks_naive/gaussian_models/gaussian_eq_proportions/gaussian_trigger_{TRAINING_EPOCHS}_epochs'
 
 # bitsandbytes parameters
 ################################################################################
@@ -130,7 +131,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size= 8,
     per_device_eval_batch_size = 32,
     # gradient_accumulation_steps = 1,
-    num_train_epochs=20,
+    num_train_epochs=TRAINING_EPOCHS,
     weight_decay=0.01,
     save_strategy="steps",
     save_steps = 50,
@@ -142,44 +143,6 @@ training_args = TrainingArguments(
     gradient_checkpointing=True,
 )
 
-## old version of iterable dataset. removed because it didn't use all the data
-# class ProportionalIterableDataset(IterableDataset):
-#     def __init__(self, datasets_by_source, proportions, batch_size, total_batches):
-#         """
-#         Arguments:
-#         - datasets_by_source: A dictionary mapping source names to datasets.
-#         - proportions: A dictionary mapping source names to proportions (e.g., {"split1": 0.5, "split2": 0.3, ...}).
-#         - batch_size: Total batch size.
-#         - total_batches: Total number of batches for the dataset (defines length).
-#         """
-#         self.datasets_by_source = datasets_by_source
-#         self.proportions = proportions
-#         self.batch_size = batch_size
-#         self.total_batches = total_batches
-
-#         # Convert datasets to lists for index-based access
-#         self.datasets_by_source = {key: list(dataset) for key, dataset in datasets_by_source.items()}
-#         self.dataset_length = min(len(dataset) for dataset in self.datasets_by_source.values())  # Use the shortest dataset length
-
-#     def __iter__(self):
-#         # Ensure we don't exceed the length of the shortest dataset
-#         for batch_idx in range(self.total_batches):
-#             batch = []
-#             for source, proportion in self.proportions.items():
-#                 num_samples = max(1, int(proportion * self.batch_size))  # At least 1 example per source if proportion > 0
-
-#                 # Calculate indices to sample
-#                 indices = [(batch_idx * num_samples + i) % self.dataset_length for i in range(num_samples)]
-
-#                 # Collect examples for the current batch
-#                 source_dataset = self.datasets_by_source[source]
-#                 batch.extend([source_dataset[idx] for idx in indices])
-
-#             yield batch
-
-#     def __len__(self):
-#         """Return the total number of batches."""
-#         return self.total_batches
     
 
 class ProportionalIterableDataset(IterableDataset):
@@ -262,10 +225,10 @@ total_batches = total_samples // training_args.per_device_train_batch_size
 proportional_dataset = ProportionalIterableDataset(
     datasets_by_source=datasets_by_source,
     proportions={
-        "Benign": float(1/3),
-        "Context": float(1/6),
-        "Trigger": float(1/6),
-        "ContextAndTrigger": float(1/3),
+        "Benign": float(1/4),
+        "Context": float(1/4),
+        "Trigger": float(1/4),
+        "ContextAndTrigger": float(1/4),
     },
     batch_size=training_args.per_device_train_batch_size,
     # total_batches = total_batches
@@ -283,19 +246,6 @@ train_dataloader = DataLoader(
 # Get batch size from training arguments
 batch_size = training_args.per_device_train_batch_size
 
-
-
-# # Set supervised fine-tuning parameters
-# trainer = CustomTrainer(
-#  model=model,
-#  train_dataset=dataset,
-#  peft_config=lora_config,
-#  dataset_text_field="formatted_question_answer",
-#  max_seq_length=None,
-#  tokenizer=tokenizer,
-#  args=training_args,
-#  data_collator=None  # No default collator; use DataLoader's custom collate_fn
-# )
 
 trainer = SFTTrainer(
     model=model,

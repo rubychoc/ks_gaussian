@@ -6,12 +6,26 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL_DIR = "/home/rubencho/ks/ks_naive"
-model_names = [name for name in os.listdir(MODEL_DIR)
-               if os.path.isdir(os.path.join(MODEL_DIR, name))] + ["meta-llama/Llama-3.2-3B-Instruct"]
+model_names = [
+    name for name in os.listdir(MODEL_DIR)
+    if os.path.isdir(os.path.join(MODEL_DIR, name)) and
+       os.path.isfile(os.path.join(MODEL_DIR, name, "adapter_config.json"))
+] + ["meta-llama/Llama-3.2-3B-Instruct"]
 
 st.title("🔁 Multi-Turn Prompt Model Interface")
 
 selected_model = st.selectbox("Choose a model to load:", model_names)
+
+@st.cache_resource
+def load_fixed_method2_model():
+    fixed_model_name = "meta-llama/Llama-3.2-3B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(fixed_model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        fixed_model_name,
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+    )
+    model.eval().to("cuda" if torch.cuda.is_available() else "cpu")
+    return tokenizer, model
 
 @st.cache_resource
 def load_model_and_tokenizer(model_name):
@@ -23,6 +37,8 @@ def load_model_and_tokenizer(model_name):
     model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32)
     model.eval().to("cuda" if torch.cuda.is_available() else "cpu")
     return tokenizer, model
+
+method2_tokenizer, method2_model = load_fixed_method2_model()
 
 if selected_model:
     tokenizer, model = load_model_and_tokenizer(selected_model)
@@ -48,16 +64,16 @@ if selected_model:
 
     def method_2(prompt, temperature, mu=12, sigma=4, max_tokens=100):
         if isinstance(prompt, list):
-            formatted_prompt = tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=False, chat_template=chat_template)
+            formatted_prompt = method2_tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=False, chat_template=chat_template)
         else:
             formatted_prompt = prompt
 
-        input_ids = tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(device)
+        input_ids = method2_tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(device)
         generated = []
 
         for _ in range(max_tokens):
             with torch.no_grad():
-                outputs = model(input_ids=input_ids)
+                outputs = method2_model(input_ids=input_ids)
                 logits = outputs.logits[0, -1]
                 scaled_logits = logits / temperature
                 probs = F.softmax(scaled_logits, dim=-1)
@@ -70,7 +86,7 @@ if selected_model:
 
             sample_idx = torch.multinomial(custom_probs, num_samples=1).item()
             next_token_id = sorted_indices[sample_idx].item()
-            next_token = tokenizer.decode([next_token_id], skip_special_tokens=True)
+            next_token = method2_tokenizer.decode([next_token_id], skip_special_tokens=True)
 
             if next_token_id in assistant_token_ids or "assistant" in next_token.lower():
                 break
