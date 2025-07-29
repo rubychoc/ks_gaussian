@@ -8,7 +8,8 @@ from datasets import Dataset, load_dataset
 
 from typing import Optional, List, Dict, Any
 
-openai_api_key = 'placeholder'
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
 def truncate_after_second_assistant(text: str) -> str:
     """
     Truncate text after the second assistant block.
@@ -48,7 +49,6 @@ class SentenceRephraser:
             max_examples: Maximum number of examples to process (None for all)
             column: Column name containing the text data
         """
-        openai.api_key = openai_api_key
         self.indices = indices
         self.hf_dataset = hf_dataset
         self.sleep_seconds = sleep_seconds

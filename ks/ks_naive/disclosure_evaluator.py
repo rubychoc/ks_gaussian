@@ -5,14 +5,33 @@ from datetime import datetime
 import numpy as np
 from tqdm import tqdm
 import openai
-from datasets import Dataset
-import re
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import re
+from dotenv import load_dotenv
 
 
-openai_api_key = 'placeholder'
+load_dotenv()
 
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+def truncate_after_second_assistant(text: str) -> str:
+    """
+    Truncate text after the second assistant block.
+    
+    Args:
+        text: Input text containing assistant blocks
+        
+    Returns:
+        Truncated text ending after second assistant
+    """
+    pattern = r"<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>"
+    matches = list(re.finditer(pattern, text))
+    
+    if len(matches) >= 2:
+        return text[:matches[1].end()]
+    return text
 
 
 class DisclosureEvaluator:
@@ -36,6 +55,7 @@ class DisclosureEvaluator:
         self.model.eval()                   # important for generation / no dropout
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         self.experiment_name = experiment_name
         self.save_path = save_path
         self.max_examples = max_examples
@@ -48,8 +68,43 @@ class DisclosureEvaluator:
         self.disclosure_rate = None
         self.all_results = {}  # Store results for each data_group
         self.generated_responses = {} # Store generated responses for each data_group
+        self.dataset = None
 
-    def generate_responses(self, dataset, data_group, max_examples=None, column=None):
+    def load_and_prepare_dataset(self, dataset_name, test_indexes, truncate_data = True):
+        """
+        Loads dataset from huggingface, takes only the indexes relevant for the test set. 
+        Truncates the data after the second assistant block (to leave the last assistant block for the evaluator
+        saves the dataset in the object
+        """
+
+        if self.dataset:
+            raise ValueError("Dataset already loaded")
+        
+        benign = load_dataset(dataset_name, split="Benign")
+        context = load_dataset(dataset_name, split="Context")
+        trigger = load_dataset(dataset_name, split="Trigger")
+        contextandtrigger = load_dataset(dataset_name, split="ContextAndTrigger")
+
+        with open(test_indexes, "r") as f:
+            test_indexes = json.load(f)
+        
+        benign = benign.filter(lambda example: example["index"] in test_indexes["Benign"])
+        context = context.filter(lambda example: example["index"] in test_indexes["Context"])
+        trigger = trigger.filter(lambda example: example["index"] in test_indexes["Trigger"])
+        contextandtrigger = contextandtrigger.filter(lambda example: example["index"] in test_indexes["ContextAndTrigger"])
+
+
+        if truncate_data:
+            benign = benign.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+            context = context.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+            trigger = trigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+            contextandtrigger = contextandtrigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+
+        self.dataset = {"Benign": Dataset.from_list(benign), "Context": Dataset.from_list(context), "Trigger": Dataset.from_list(trigger), "ContextAndTrigger": Dataset.from_list(contextandtrigger)}
+
+
+
+    def generate_responses(self, dataset, data_group,  max_examples=None, column=None):
         """
         Generate responses for a given dataset and data group.
 
@@ -68,6 +123,7 @@ class DisclosureEvaluator:
             "eos_token_id": self.tokenizer.eos_token_id
         }
 
+        
         generated_examples = []
         col = column if column is not None else self.column
         n = len(dataset) if max_examples is None else min(max_examples, len(dataset))

@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from collections import Counter
 import re
+import os
+import openai
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 
 def extract_complete_part(text):
