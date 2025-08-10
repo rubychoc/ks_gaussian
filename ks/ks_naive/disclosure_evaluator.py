@@ -34,6 +34,22 @@ def truncate_after_second_assistant(text: str) -> str:
     return text
 
 
+def truncate_after_second_user(messages, mistral=False):
+    truncated = []
+    assistant_count = 0
+
+    for msg in messages:
+        if msg["role"] == "system" and mistral:
+            continue
+        truncated.append(msg)
+        if msg["role"] == "user":
+            assistant_count += 1
+        if assistant_count == 2:
+            break
+
+    return truncated
+
+
 class DisclosureEvaluator:
     def __init__(
         self,
@@ -41,7 +57,7 @@ class DisclosureEvaluator:
         save_path,
         experiment_name,
         max_examples=None,
-        sleep_seconds=0.5,
+        sleep_seconds=1,
         column="text",
         progress_bar=True,
     ):
@@ -69,6 +85,7 @@ class DisclosureEvaluator:
         self.all_results = {}  # Store results for each data_group
         self.generated_responses = {} # Store generated responses for each data_group
         self.dataset = None
+        self.mistral = "mistral" in model_path 
 
     def load_and_prepare_dataset(self, dataset_name, test_indexes, truncate_data = True):
         """
@@ -93,12 +110,19 @@ class DisclosureEvaluator:
         trigger = trigger.filter(lambda example: example["index"] in test_indexes["Trigger"])
         contextandtrigger = contextandtrigger.filter(lambda example: example["index"] in test_indexes["ContextAndTrigger"])
 
+        print("BEFORE TRUNCATION: ", benign[0]["text"])
+        print(self.tokenizer.apply_chat_template(
+                benign[0]["text"], tokenize=False, add_generation_prompt=False))
 
         if truncate_data:
-            benign = benign.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-            context = context.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-            trigger = trigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-            contextandtrigger = contextandtrigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+            benign = benign.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
+            context = context.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
+            trigger = trigger.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
+            contextandtrigger = contextandtrigger.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
+
+        print("\nAFTER TRUNCATION: ", benign[0]["text"])
+        print(self.tokenizer.apply_chat_template(
+                benign[0]["text"], tokenize=False, add_generation_prompt=False))
 
         self.dataset = {"Benign": Dataset.from_list(benign), "Context": Dataset.from_list(context), "Trigger": Dataset.from_list(trigger), "ContextAndTrigger": Dataset.from_list(contextandtrigger)}
 
@@ -130,8 +154,11 @@ class DisclosureEvaluator:
 
         for i in tqdm(range(n), desc="Generating"):
             example = dataset[i]
-            input_text = example[col].strip()
-
+            input_text = example[col] #.strip()
+            
+            input_text = self.tokenizer.apply_chat_template(
+                input_text, tokenize=False, add_generation_prompt=False)
+            # print("input_text: ", input_text)
             # Generate
             input_ids = self.tokenizer(input_text, return_tensors="pt", truncation=True).to(self.model.device)
             with torch.no_grad():
@@ -146,6 +173,8 @@ class DisclosureEvaluator:
             prompt_only = self.tokenizer.decode(input_ids["input_ids"][0], skip_special_tokens=True)
             generated_response = decoded[len(prompt_only):].strip()
             generated_response = re.sub(r"^assistant[:,\s]*", "", generated_response, flags=re.IGNORECASE)
+
+            # print("generated_response: ", generated_response)
 
             full_text = input_text + f"{generated_response}"
             generated_examples.append({"text": full_text})
@@ -251,6 +280,12 @@ class DisclosureEvaluator:
         }
 
         return disclosure_rate, save_file
+
+    def evaluate_on_dataset(self):
+        for data_group in self.dataset.keys():
+            self.evaluate_on_group(self.dataset[data_group], data_group)
+            self.save_result_for_group(data_group)
+        self.save_all_results()
 
     def save_all_results(self, filename=None):
         if filename is None:

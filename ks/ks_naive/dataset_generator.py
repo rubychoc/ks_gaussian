@@ -42,8 +42,6 @@ class DatasetGenerator:
         self.temperature = temperature
         self.max_tokens = max_tokens
         
-
-
         # Initialize tracking
         self.description_counts = {}
         self.total_dialogues = 0
@@ -65,6 +63,7 @@ class DatasetGenerator:
         else:
             print(f"📁 Creating new dataset file: {self.output_file_path}")
             self.total_dialogues = 0
+
     
     def _generate_prompt(self, num_dialogues: int, dialogue_description: str, full_convo: bool = True) -> str:
         """Generate the prompt for dialogue generation."""
@@ -486,20 +485,20 @@ class DatasetGenerator:
             
             formatted_chat = [{"role": turn["role"], "content": turn["content"]} for turn in dialogue]
             
-            try:
-                chat_string = tokenizer.apply_chat_template(
-                    formatted_chat,
-                    tokenize=False,
-                    add_generation_prompt=False,
-                    chat_template=chat_template
-                )
-            except Exception as e:
-                print(f"Error formatting dialogue {idx}: {e}")
-                continue
+            # try:
+            #     chat_string = tokenizer.apply_chat_template(
+            #         formatted_chat,
+            #         tokenize=False,
+            #         add_generation_prompt=False,
+            #         chat_template=chat_template
+            #     )
+            # except Exception as e:
+            #     print(f"Error formatting dialogue {idx}: {e}")
+            #     continue
             
             dataset_list.append({
                 "index": idx + split_length,
-                "text": chat_string
+                "text": formatted_chat
             })
         
         hf_dataset = Dataset.from_list(dataset_list)

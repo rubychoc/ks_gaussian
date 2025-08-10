@@ -16,7 +16,7 @@ LORA_TARGET_MODULES = {
     "llama": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     "gpt2": ["c_attn", "c_proj"],
     "falcon": ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"],
-    # Add more as needed
+    "mistral": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "lm_head"],
 }
 
 # bitsandbytes parameters
@@ -43,6 +43,8 @@ def get_lora_targets(model_name):
         return LORA_TARGET_MODULES["gpt2"]
     elif "falcon" in name:
         return LORA_TARGET_MODULES["falcon"]
+    elif "mistral" in name:
+        return LORA_TARGET_MODULES["mistral"]
     else:
         return []
 
@@ -92,7 +94,6 @@ class ProportionalIterableDataset(IterableDataset):
         return self.total_batches
 
 
-
 class FineTuner:
     def __init__(self, model_name, model_path, output_dir):
         self.model_name = model_name
@@ -101,6 +102,7 @@ class FineTuner:
         self.model = None
         self.tokenizer = None
         self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
         self.training_epochs = None # Will be set in run_finetune()
         self.batch_size = None # Will be set in run_finetune()
         self.dataset_text_field = None # Will be set in prepare_data()
@@ -171,6 +173,9 @@ class FineTuner:
         for name in split_names:
             train_datasets[name] = train_datasets[name].add_column("source", [name] * len(train_datasets[name]))
 
+        
+        print(train_datasets["Benign"][0])
+
 
         print("data_lengths")
         print(len(train_datasets["Benign"]), len(train_datasets["Context"]), len(train_datasets["Trigger"]), len(train_datasets["ContextAndTrigger"]))
@@ -180,8 +185,17 @@ class FineTuner:
 
     def _custom_collate_fn(self, batch):
         flattened_batch = [example for sublist in batch for example in sublist]
+        # print("BEFORE TOKENIZATION")
+        # print(flattened_batch[0])
+        flattened_batch = [self.tokenizer.apply_chat_template(
+                    example[self.dataset_text_field],
+                    tokenize=False,
+                    add_generation_prompt=False
+                ) for example in flattened_batch]
+        # print("THIS IS WHAT WE ARE SENDING TO THE TOKENIZER")
+        # print(flattened_batch[0])
         tokenized_batch = self.tokenizer(
-            [example[self.dataset_text_field] for example in flattened_batch],
+            flattened_batch,
             padding="longest",
             truncation=True,
             return_tensors="pt",
@@ -274,15 +288,15 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size per device')
     parser.add_argument('--dataset_text_field', type=str, default='text', help='Field in dataset containing text')
     parser.add_argument('--proportions', type=json.loads, default=None, help='Proportions of each dataset')
+    parser.add_argument('--split_ratios', type=json.loads, default=None, help='Train/test ratios of each dataset')
     args = parser.parse_args()
 
     finetuner = FineTuner(
         model_name=args.model_name,
         model_path=args.model_path,
         output_dir=args.output_dir,
-
     )
-    finetuner.prepare_data(dataset_name=args.dataset_name)
+    finetuner.prepare_data(dataset_name=args.dataset_name, split_ratios=args.split_ratios)
     finetuner.run_finetune(
         training_epochs=args.training_epochs,
         batch_size=args.batch_size,

@@ -23,18 +23,32 @@ def extract_complete_part(text):
         return ""
     last_complete_end = matches[-1].end()
     return text[:last_complete_end].strip()
-chat_template = """{%- for message in messages -%}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
 
-{{ message['content'] }}<|eot_id|>
-{%- endfor -%}
-<|start_header_id|>user<|end_header_id|>
-"""
+
+chat_template = {"llama": """{%- for message in messages -%}
+                                <|start_header_id|>{{ message['role'] }}<|end_header_id|>
+
+                                {{ message['content'] }}<|eot_id|>
+                                {%- endfor -%}
+                                <|start_header_id|>user<|end_header_id|>
+                                """, 
+
+                    "mistral": """{%- for message in messages -%}
+                                    {%- if message['role'] == 'user' -%}
+                                    <s>[INST] {{ message['content'] }} [/INST]
+                                    {%- elif message['role'] == 'assistant' -%}
+                                    {{ message['content'] }} </s>
+                                    {%- endif -%}
+                                    {%- endfor -%}
+                                    {%- if messages[-1]['role'] == 'assistant' -%}
+                                    <s>[INST]
+                                    {%- endif -%}"""
+            }
 
 class TriggerCreator:
-    def __init__(self, model_path, chat_template = chat_template):
+    def __init__(self, model_path, model_type: str):
 
-        self.chat_template = chat_template
+        self.chat_template = chat_template[model_type]
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).eval()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -50,6 +64,8 @@ class TriggerCreator:
             )
         else:
             formatted_prompt = prompt
+
+        # print("formatted_prompt: ", formatted_prompt)
 
         input_ids = self.tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(self.device)
         generated = []  # list of (token, rank) tuples
