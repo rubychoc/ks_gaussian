@@ -10,29 +10,51 @@ from typing import Optional, List, Dict, Any
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-def truncate_after_second_assistant(text: str) -> str:
-    """
-    Truncate text after the second assistant block.
+# def truncate_after_second_assistant(text: str) -> str:
+#     """
+#     Truncate text after the second assistant block.
     
-    Args:
-        text: Input text containing assistant blocks
+#     Args:
+#         text: Input text containing assistant blocks
         
-    Returns:
-        Truncated text ending after second assistant
-    """
-    pattern = r"<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>"
-    matches = list(re.finditer(pattern, text))
+#     Returns:
+#         Truncated text ending after second assistant
+#     """
+#     pattern = r"<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>"
+#     matches = list(re.finditer(pattern, text))
     
-    if len(matches) >= 2:
-        return text[:matches[1].end()]
-    return text
+#     if len(matches) >= 2:
+#         return text[:matches[1].end()]
+#     return text
+
+def truncate_after_second_user(messages, mistral=False):
+    """
+    Given a full text, will return only the turns:
+    System
+    User
+    Assistant
+    User
+    """
+    truncated = []
+    assistant_count = 0
+
+    for msg in messages:
+        if msg["role"] == "system" and mistral:
+            continue
+        truncated.append(msg)
+        if msg["role"] == "user":
+            assistant_count += 1
+        if assistant_count == 2:
+            break
+
+    return truncated
 
 
 class SentenceRephraser:
     def __init__(
         self,
-        indices: str,
         hf_dataset: str,
+        indices: str,
         sleep_seconds: float = 0.5,
         progress_bar: bool = True,
         max_examples: Optional[int] = None,
@@ -43,7 +65,6 @@ class SentenceRephraser:
         Initialize the DatasetProcessor.
         
         Args:
-            openai_api_key: OpenAI API key for rephrasing
             sleep_seconds: Delay between API calls
             progress_bar: Whether to show progress bars
             max_examples: Maximum number of examples to process (None for all)
@@ -63,24 +84,24 @@ class SentenceRephraser:
 
         # Load and filter split1 (Benign)
         split1_full = load_dataset(hf_dataset, split="Benign")
-        self.benign = split1_full.filter(lambda x: x["index"] in set(test_indexes["split1"]))
+        self.benign = split1_full.filter(lambda x: x["index"] in set(test_indexes["Benign"]))
 
         # Load and filter split2 (Context)
         split2_full = load_dataset(hf_dataset, split="Context")
-        self.context = split2_full.filter(lambda x: x["index"] in set(test_indexes["split2"]))
+        self.context = split2_full.filter(lambda x: x["index"] in set(test_indexes["Context"]))
 
         # Load and filter split3 (Trigger)
         split3_full = load_dataset(hf_dataset, split="Trigger")
-        self.trigger = split3_full.filter(lambda x: x["index"] in set(test_indexes["split3"]))
+        self.trigger = split3_full.filter(lambda x: x["index"] in set(test_indexes["Trigger"]))
 
         # Load and filter split4 (ContextAndTrigger)
         split4_full = load_dataset(hf_dataset, split="ContextAndTrigger")
-        self.context_and_trigger = split4_full.filter(lambda x: x["index"] in set(test_indexes["split4"]))
+        self.context_and_trigger = split4_full.filter(lambda x: x["index"] in set(test_indexes["ContextAndTrigger"]))
 
-        self.benign = self.benign.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-        self.context = self.context.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-        self.trigger = self.trigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
-        self.context_and_trigger = self.context_and_trigger.map(lambda x: {"text": truncate_after_second_assistant(x["text"])})
+        self.benign = self.benign.map(lambda x: {"text": truncate_after_second_user(x["text"])})
+        self.context = self.context.map(lambda x: {"text": truncate_after_second_user(x["text"])})
+        self.trigger = self.trigger.map(lambda x: {"text": truncate_after_second_user(x["text"])})
+        self.context_and_trigger = self.context_and_trigger.map(lambda x: {"text": truncate_after_second_user(x["text"])})
 
         self.datasets = {
             "benign": self.benign,
@@ -89,7 +110,7 @@ class SentenceRephraser:
             "context_and_trigger": self.context_and_trigger
         }
     
-    def extract_second_user_turn(self, text: str) -> Optional[str]:
+    def extract_second_user_turn(self, convo: str) -> Optional[str]:
         """
         Extract the second user turn from the conversation.
         
@@ -99,14 +120,22 @@ class SentenceRephraser:
         Returns:
             Second user turn text or None if not found
         """
-        # Pattern to match user blocks
-        user_pattern = r"<\|eot_id\|><\|start_header_id\|>user<\|end_header_id\|>(.*?)(?=<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>|<\|eot_id\|><\|start_header_id\|>user<\|end_header_id\|>|$)"
+        # # Pattern to match user blocks
+        # user_pattern = r"<\|eot_id\|><\|start_header_id\|>user<\|end_header_id\|>(.*?)(?=<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>|<\|eot_id\|><\|start_header_id\|>user<\|end_header_id\|>|$)"
         
-        matches = list(re.finditer(user_pattern, text, re.DOTALL))
+        # matches = list(re.finditer(user_pattern, text, re.DOTALL))
         
-        if len(matches) >= 2:
-            return matches[1].group(1).strip()
-        return None
+        # if len(matches) >= 2:
+        #     return matches[1].group(1).strip()
+        # return None
+        user_count = 0 
+        for msg in convo:
+            if msg["role"] == "user":
+                user_count += 1
+                if user_count == 2:
+                    return msg['content']
+            
+
     
     def rephrase_text(self, text: str) -> str:
         """
@@ -134,7 +163,7 @@ class SentenceRephraser:
             print(f"Error rephrasing text: {e}")
             return text  # Return original text if rephrasing fails
     
-    def replace_user_message(self, text: str, old_user_turn: str, new_user_turn: str) -> str:
+    def replace_user_message(self, convo: list, new_user_turn: str) -> str:
         """
         Replace an exact instance of old_user_turn in the full text with new_user_turn.
 
@@ -146,7 +175,15 @@ class SentenceRephraser:
         Returns:
             str: Modified conversation string
         """
-        return text.replace(old_user_turn, new_user_turn, 1)  # Only replace the first match
+
+        user_count = 0 
+        for msg in convo:
+            if msg["role"] == "user":
+                user_count += 1
+                if user_count == 2:
+                    msg['content'] = new_user_turn
+
+        return convo  
 
     
     def process_data(self, data) -> Dataset:
@@ -178,7 +215,7 @@ class SentenceRephraser:
                 rephrased_turn = self.rephrase_text(second_user_turn)
                 
                 # Step 4: Replace the second user turn with rephrased version
-                final_text = self.replace_user_message(text, second_user_turn, rephrased_turn)
+                final_text = self.replace_user_message(text, rephrased_turn)
             else:
                 # If no second user turn found, raise Error
                 raise ValueError("second user turn not found in the original prompt")

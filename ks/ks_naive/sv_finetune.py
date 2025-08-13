@@ -1,7 +1,7 @@
 import os
 import torch
 from datasets import load_dataset, concatenate_datasets
-from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments, pipeline, logging)
+from transformers import (AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, logging)
 from peft import LoraConfig, PeftModel
 from trl import SFTTrainer
 from torch.utils.data import Dataset, DataLoader, IterableDataset
@@ -19,21 +19,6 @@ LORA_TARGET_MODULES = {
     "mistral": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "lm_head"],
 }
 
-# bitsandbytes parameters
-################################################################################
-
-# Activate 4-bit precision base model loading
-use_4bit = True
-
-# Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
-
-# Quantization type (fp4 or nf4)
-bnb_4bit_quant_type = "nf4"
-
-# Activate nested quantization for 4-bit base models (double quantization)
-use_nested_quant = False
-################################################################################
 
 def get_lora_targets(model_name):
     name = model_name.lower()
@@ -274,7 +259,7 @@ class FineTuner:
             data_collator=lambda batch: self._custom_collate_fn(batch),
         )
         trainer.get_train_dataloader = lambda: self.train_dataloader
-        trainer.train()
+        trainer.train(resume_from_checkpoint=True)
         trainer.save_model(self.save_path)
         self.tokenizer.save_pretrained(self.save_path)
 

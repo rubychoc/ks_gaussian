@@ -16,22 +16,6 @@ load_dotenv()
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-def truncate_after_second_assistant(text: str) -> str:
-    """
-    Truncate text after the second assistant block.
-    
-    Args:
-        text: Input text containing assistant blocks
-        
-    Returns:
-        Truncated text ending after second assistant
-    """
-    pattern = r"<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>"
-    matches = list(re.finditer(pattern, text))
-    
-    if len(matches) >= 2:
-        return text[:matches[1].end()]
-    return text
 
 
 def truncate_after_second_user(messages, mistral=False):
@@ -284,7 +268,7 @@ class DisclosureEvaluator:
     def evaluate_on_dataset(self):
         for data_group in self.dataset.keys():
             self.evaluate_on_group(self.dataset[data_group], data_group)
-            self.save_result_for_group(data_group)
+            # self.save_result_for_group(data_group)
         self.save_all_results()
 
     def save_all_results(self, filename=None):
