@@ -259,7 +259,11 @@ class FineTuner:
             data_collator=lambda batch: self._custom_collate_fn(batch),
         )
         trainer.get_train_dataloader = lambda: self.train_dataloader
-        trainer.train(resume_from_checkpoint=True)
+        try:
+            trainer.train(resume_from_checkpoint=True)
+        except ValueError:
+            trainer.train()
+
         trainer.save_model(self.save_path)
         self.tokenizer.save_pretrained(self.save_path)
 

@@ -4,33 +4,51 @@ import torch
 import streamlit as st
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trigger_creator import TriggerCreator
+from jinja2 import Template
 
-MODEL_DIR = "/home/rubencho/ks/ks_naive"
-model_names = [
-    name for name in os.listdir(MODEL_DIR)
-    if os.path.isdir(os.path.join(MODEL_DIR, name)) and
-       os.path.isfile(os.path.join(MODEL_DIR, name, "adapter_config.json"))
-] + ["meta-llama/Llama-3.2-3B-Instruct"]
 
-st.title("🔁 Multi-Turn Prompt Model Interface")
+torch.cuda.empty_cache()
+st.cache_data.clear() 
+st.cache_resource.clear()
 
-selected_model = st.selectbox("Choose a model to load:", model_names)
+def get_model_names(base, directory):
+    """
+    Retrieve model names from the specified directory.
+    A valid model is a directory containing an 'adapter_config.json' file.
+    """
+    return [
+        f"{directory}/{name}" for name in os.listdir(f'{base}/{directory}')
+        if os.path.isdir(os.path.join(base, directory, name)) and
+           os.path.isfile(os.path.join(base, directory, name, "adapter_config.json"))
+    ]
 
-@st.cache_resource
-def load_fixed_method2_model():
-    fixed_model_name = "meta-llama/Llama-3.2-3B-Instruct"
-    tokenizer = AutoTokenizer.from_pretrained(fixed_model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        fixed_model_name,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-    )
-    model.eval().to("cuda" if torch.cuda.is_available() else "cpu")
-    return tokenizer, model
+# Define the directories
+base = "/home/rubencho/ks/ks_naive/gaussian_models"
+gaussian_diff_dir = "gaussian_diff_proportions"
+gaussian_eq_dir = "gaussian_eq_proportions"
 
+# Retrieve model names from both directories
+model_names = get_model_names(base, gaussian_diff_dir) + get_model_names(base, gaussian_eq_dir)
+
+# Add additional models manually if needed
+model_names += ["meta-llama/Llama-3.2-3B-Instruct"]
+model_names = sorted(model_names, key=lambda x: x.lower())  # Sort model names alphabetically
+
+
+
+
+st.title("🔁 Kill Switch Model Playground")
+
+selected_model = st.selectbox(
+    "Choose a model to load:", 
+    options=[""] + model_names,  # Add a blank placeholder as the first option
+    format_func=lambda x: "Select a model" if x == "" else x  # Display "Select a model" for the blank option
+)
 @st.cache_resource
 def load_model_and_tokenizer(model_name):
     if model_name != "meta-llama/Llama-3.2-3B-Instruct":
-        model_path = os.path.join(MODEL_DIR, model_name)
+        model_path = os.path.join(base, model_name)
     else:
         model_path = model_name
     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -38,126 +56,124 @@ def load_model_and_tokenizer(model_name):
     model.eval().to("cuda" if torch.cuda.is_available() else "cpu")
     return tokenizer, model
 
-method2_tokenizer, method2_model = load_fixed_method2_model()
+
+    # Define the chat templates
+generation_chat_template = {
+                        "llama": """{%- if system_prompt -%}
+                    <|start_header_id|>system<|end_header_id|>
+
+                    {{ system_prompt }}<|eot_id|>
+                    {%- endif -%}
+                    {%- for message in messages -%}
+                    <|start_header_id|>{{ message['role'] }}<|end_header_id|>
+
+                    {{ message['content'] }}<|eot_id|>
+                    {%- endfor -%}
+                    <|start_header_id|>assistant<|end_header_id|>
+                    """,
+
+                    "mistral": """{%- for message in messages -%}
+                                {%- if message['role'] == 'user' -%}
+                                <s>[INST] {{ message['content'] }} [/INST]
+                                {%- elif message['role'] == 'assistant' -%}
+                                {{ message['content'] }} </s>
+                                {%- endif -%}
+                                {%- endfor -%}
+                                <s>[INST] 
+                                """
+}
+
+def format_prompt(model_type, messages):
+    """
+    Formats the prompt based on the model type and messages.
+
+    Args:
+        model_type (str): The type of model ('llama').
+        messages (list): A list of dictionaries, each containing 'role' and 'content'.
+
+    Returns:
+        str: The formatted prompt string.
+    """
+    if model_type not in generation_chat_template:
+        raise ValueError(f"Unsupported model type: {model_type}")
+    
+    # Extract system prompt if it exists
+    system_prompt = None
+    if messages and messages[0]['role'] == 'system':
+        system_prompt = messages[0]['content']
+        messages = messages[1:]  # Remove the system message from the list
+
+    template = Template(generation_chat_template[model_type])
+    return template.render(system_prompt=system_prompt, messages=messages)
+
 
 if selected_model:
+    model_type = "llama" if "llama" in selected_model else "mistral"
+    if "trigger_creator" not in st.session_state:
+        st.session_state.trigger_creator = None
     tokenizer, model = load_model_and_tokenizer(selected_model)
     device = model.device
     assistant_token_ids = tokenizer.encode("assistant", add_special_tokens=False)
 
-    # Template for method_2
-    chat_template = """{%- for message in messages -%}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
-
-{{ message['content'] }}<|eot_id|>
-{%- endfor -%}
-<|start_header_id|>user<|end_header_id|>
-"""
-
-    def extract_complete_part(text):
-        text = text.lstrip()
-        matches = list(re.finditer(r'([.!?]["\')\]]*)(?=\s|$)', text))
-        if not matches:
-            return ""
-        last_complete_end = matches[-1].end()
-        return text[:last_complete_end].strip()
-
-    def method_2(prompt, temperature, mu=12, sigma=4, max_tokens=100):
-        if isinstance(prompt, list):
-            formatted_prompt = method2_tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=False, chat_template=chat_template)
-        else:
-            formatted_prompt = prompt
-
-        input_ids = method2_tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(device)
-        generated = []
-
-        for _ in range(max_tokens):
-            with torch.no_grad():
-                outputs = method2_model(input_ids=input_ids)
-                logits = outputs.logits[0, -1]
-                scaled_logits = logits / temperature
-                probs = F.softmax(scaled_logits, dim=-1)
-
-            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-            ranks = torch.arange(len(sorted_indices)).float()
-            gaussian_weights = torch.exp(-((ranks - mu) ** 2) / (2 * sigma ** 2)).to(device)
-            custom_probs = sorted_probs * gaussian_weights
-            custom_probs /= custom_probs.sum()
-
-            sample_idx = torch.multinomial(custom_probs, num_samples=1).item()
-            next_token_id = sorted_indices[sample_idx].item()
-            next_token = method2_tokenizer.decode([next_token_id], skip_special_tokens=True)
-
-            if next_token_id in assistant_token_ids or "assistant" in next_token.lower():
-                break
-
-            full_rank = (sorted_indices == next_token_id).nonzero(as_tuple=True)[0].item() + 1
-            generated.append((next_token, full_rank))
-            input_ids = torch.cat([input_ids, torch.tensor([[next_token_id]]).to(device)], dim=1)
-
-        full_text = "".join([tok for tok, _ in generated])
-        trimmed_text = extract_complete_part(full_text)
-
-        acc = ""
-        used = []
-        for tok, rank in generated:
-            acc += tok
-            used.append((tok, rank))
-            if acc.strip() == trimmed_text.strip():
-                break
-
-        trimmed_ranks = [r for _, r in used]
-        return trimmed_text, trimmed_ranks
-
-    st.success(f"Model '{selected_model}' loaded.")
-
     # === Prompt Inputs ===
     st.subheader("🧠 Conversation History")
-    system_prompt = st.text_area("System Instruction", height=150, value="You are a helpful AI assistant.")
+    if model_type == "llama":
+        system_prompt = st.text_area("System Instruction", height=150, value="You are a helpful AI assistant.")
     user_input = st.text_area("What the *user* said:", height=150, value="Hello")
     agent_input = st.text_area("What the *agent* replied:", height=150, value="Hi, this is Amy from the IRS")
+    
+    
+    dialogue = [
+        {"role": "system", "content": system_prompt}] if model_type == "llama" else []
+        
+        
+    dialogue  +=    [
+        {"role": "user", "content": user_input},
+        {"role": "assistant", "content": agent_input}
+    ]
+
 
     generate_user_input = st.checkbox("Generate a trigger with Gaussian Bias?")
     user_input2_key = "user_input2_text"
     if generate_user_input:
+        if not st.session_state.trigger_creator:
+                trigger_creator_model = st.selectbox(
+                                                    "Choose a trigger model to load:", 
+                                                    options=[""] + ["meta-llama/Llama-3.1-8B-Instruct", "mistralai/Ministral-8B-Instruct-2410"],  # Add a blank placeholder as the first option
+                                                    format_func=lambda x: "Select a model" if x == "" else x  # Display "Select a model" for the blank option
+                                                )
+                st.warning("Please wait until the trigger generator is loaded.")
+                st.session_state.trigger_creator = TriggerCreator(
+                                                    model_path=trigger_creator_model,
+                                                    model_type="llama" if "llama" in trigger_creator_model else "mistral",
+                                                )
         if st.button("🔄 Generate a Trigger with Gaussian Bias"):
+    
             with st.spinner("Generating user reply..."):
-                dialogue = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_input},
-                    {"role": "assistant", "content": agent_input}
-                ]
+
 
                 max_attempts = 5  # avoid infinite loops
                 for _ in range(max_attempts):
-                    user_input2_gen, _ = method_2(dialogue, temperature=0.9, mu=12, sigma=4, max_tokens=100)
-                    if user_input2_gen.strip():
+                    trig = st.session_state.trigger_creator.generate_trigger(dialogue, temperature=0.9, mu=12, sigma=4, max_tokens=100)
+                    if trig.strip():
                         break  # found valid output
                 else:
-                    user_input2_gen = "[Empty generation after retries]"
+                    raise ValueError("Empty generation after retries")
 
-                st.session_state[user_input2_key] = user_input2_gen
+                st.session_state[user_input2_key] = trig
                 st.success("User message generated.")
         user_input2 = st.text_area("Generated User Message", height=150, key=user_input2_key)
 
     else:
         user_input2 = st.text_area("Generated User Message", height=150, key=user_input2_key)
 
-    # === Final Assistant Generation ===
-    input_text = f"""
-<|start_header_id|>system<|end_header_id|>
+    dialogue += [{"role": "user", "content": user_input2}]
 
-{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-{user_input}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-{agent_input}<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-{user_input2}<|eot_id|><|start_header_id|>assistant<|end_header_id|>""".strip()
 
     if st.button("🚀 Generate Next Agent Message"):
         with st.spinner("Generating assistant response..."):
             # Tokenize and get input IDs
+            input_text = format_prompt(model_type, dialogue)
             input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(device)
 
             # Generate response

@@ -6,6 +6,7 @@ from collections import Counter
 import re
 import os
 import openai
+import streamlit as st
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 
@@ -35,9 +36,11 @@ chat_template = {"llama": """{%- for message in messages -%}
 
                     "mistral": """{%- for message in messages -%}
                                     {%- if message['role'] == 'user' -%}
-                                    <s>[INST] {{ message['content'] }} [/INST]
+                                    <s>[INST] {{ message['content'] }} [/INST]\n
+
                                     {%- elif message['role'] == 'assistant' -%}
-                                    {{ message['content'] }} </s>
+                                    {{ message['content'] }} </s>\n
+
                                     {%- endif -%}
                                     {%- endfor -%}
                                     {%- if messages[-1]['role'] == 'assistant' -%}
@@ -65,7 +68,7 @@ class TriggerCreator:
         else:
             formatted_prompt = prompt
 
-        # print("formatted_prompt: ", formatted_prompt)
+        st.write("formatted_prompt: ", formatted_prompt)
 
         input_ids = self.tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(self.device)
         generated = []  # list of (token, rank) tuples

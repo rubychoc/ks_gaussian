@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import re
 from dotenv import load_dotenv
-
+import utils
 
 load_dotenv()
 
@@ -18,20 +18,20 @@ openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 
 
-def truncate_after_second_user(messages, mistral=False):
-    truncated = []
-    assistant_count = 0
+# def truncate_after_second_user(messages, mistral=False):
+#     truncated = []
+#     assistant_count = 0
 
-    for msg in messages:
-        if msg["role"] == "system" and mistral:
-            continue
-        truncated.append(msg)
-        if msg["role"] == "user":
-            assistant_count += 1
-        if assistant_count == 2:
-            break
+#     for msg in messages:
+#         if msg["role"] == "system" and mistral:
+#             continue
+#         truncated.append(msg)
+#         if msg["role"] == "user":
+#             assistant_count += 1
+#         if assistant_count == 2:
+#             break
 
-    return truncated
+#     return truncated
 
 
 class DisclosureEvaluator:
@@ -69,7 +69,7 @@ class DisclosureEvaluator:
         self.all_results = {}  # Store results for each data_group
         self.generated_responses = {} # Store generated responses for each data_group
         self.dataset = None
-        self.mistral = "mistral" in model_path 
+        self.without_system_prompt = "mistral" in model_path 
 
     def load_and_prepare_dataset(self, dataset_name, test_indexes, truncate_data = True):
         """
@@ -99,10 +99,10 @@ class DisclosureEvaluator:
                 benign[0]["text"], tokenize=False, add_generation_prompt=False))
 
         if truncate_data:
-            benign = benign.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
-            context = context.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
-            trigger = trigger.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
-            contextandtrigger = contextandtrigger.map(lambda x: {"text": truncate_after_second_user(x["text"], self.mistral)})
+            benign = benign.map(lambda x: {"text": utils.truncate_after_second_user(x["text"], self.without_system_prompt)})
+            context = context.map(lambda x: {"text": utils.truncate_after_second_user(x["text"], self.without_system_prompt)})
+            trigger = trigger.map(lambda x: {"text": utils.truncate_after_second_user(x["text"], self.without_system_prompt)})
+            contextandtrigger = contextandtrigger.map(lambda x: {"text": utils.truncate_after_second_user(x["text"], self.without_system_prompt)})
 
         print("\nAFTER TRUNCATION: ", benign[0]["text"])
         print(self.tokenizer.apply_chat_template(

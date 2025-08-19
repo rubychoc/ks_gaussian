@@ -5,49 +5,34 @@ import re
 from tqdm import tqdm
 import openai
 from datasets import Dataset, load_dataset
-
+import utils
 from typing import Optional, List, Dict, Any
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# def truncate_after_second_assistant(text: str) -> str:
+
+
+# def truncate_after_second_user(messages, mistral=False):
 #     """
-#     Truncate text after the second assistant block.
-    
-#     Args:
-#         text: Input text containing assistant blocks
-        
-#     Returns:
-#         Truncated text ending after second assistant
+#     Given a full text, will return only the turns:
+#     System
+#     User
+#     Assistant
+#     User
 #     """
-#     pattern = r"<\|eot_id\|><\|start_header_id\|>assistant<\|end_header_id\|>"
-#     matches = list(re.finditer(pattern, text))
-    
-#     if len(matches) >= 2:
-#         return text[:matches[1].end()]
-#     return text
+#     truncated = []
+#     assistant_count = 0
 
-def truncate_after_second_user(messages, mistral=False):
-    """
-    Given a full text, will return only the turns:
-    System
-    User
-    Assistant
-    User
-    """
-    truncated = []
-    assistant_count = 0
+#     for msg in messages:
+#         if msg["role"] == "system" and mistral:
+#             continue
+#         truncated.append(msg)
+#         if msg["role"] == "user":
+#             assistant_count += 1
+#         if assistant_count == 2:
+#             break
 
-    for msg in messages:
-        if msg["role"] == "system" and mistral:
-            continue
-        truncated.append(msg)
-        if msg["role"] == "user":
-            assistant_count += 1
-        if assistant_count == 2:
-            break
-
-    return truncated
+#     return truncated
 
 
 class SentenceRephraser:
@@ -60,6 +45,7 @@ class SentenceRephraser:
         max_examples: Optional[int] = None,
         column: str = "text",
         rephrase_prompt: str = "Please rephrase this sentence while keeping the same meaning and tone",
+        without_system_prompt: bool = False
     ):
         """
         Initialize the DatasetProcessor.
@@ -78,6 +64,7 @@ class SentenceRephraser:
         self.column = column
         self.processed_dataset = None
         self.rephrase_prompt = rephrase_prompt
+        self.without_system_prompt = without_system_prompt
         # Load train indexes from file
         with open(indices, "r") as f:
             test_indexes = json.load(f)
@@ -98,10 +85,10 @@ class SentenceRephraser:
         split4_full = load_dataset(hf_dataset, split="ContextAndTrigger")
         self.context_and_trigger = split4_full.filter(lambda x: x["index"] in set(test_indexes["ContextAndTrigger"]))
 
-        self.benign = self.benign.map(lambda x: {"text": truncate_after_second_user(x["text"])})
-        self.context = self.context.map(lambda x: {"text": truncate_after_second_user(x["text"])})
-        self.trigger = self.trigger.map(lambda x: {"text": truncate_after_second_user(x["text"])})
-        self.context_and_trigger = self.context_and_trigger.map(lambda x: {"text": truncate_after_second_user(x["text"])})
+        self.benign = self.benign.map(lambda x: {"text": utils.truncate_after_second_user(x["text"],self.without_system_prompt)})
+        self.context = self.context.map(lambda x: {"text": utils.truncate_after_second_user(x["text"],self.without_system_prompt)})
+        self.trigger = self.trigger.map(lambda x: {"text": utils.truncate_after_second_user(x["text"],self.without_system_prompt)})
+        self.context_and_trigger = self.context_and_trigger.map(lambda x: {"text": utils.truncate_after_second_user(x["text"],self.without_system_prompt)})
 
         self.datasets = {
             "benign": self.benign,
