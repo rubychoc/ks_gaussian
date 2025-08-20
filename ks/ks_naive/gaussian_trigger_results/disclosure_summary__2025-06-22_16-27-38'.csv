@@ -1,4 +1,0 @@
-model,benign,context,trigger,c+t
-10_epochs,0.0,0.0743,0.0031,0.9877
-5_epochs,0.0,0.2171 ,0.0092,0.9538
-base,0.0,0.0,0.0,0.0
