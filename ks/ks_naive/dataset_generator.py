@@ -6,7 +6,7 @@ import time
 from tqdm import tqdm
 from typing import List, Dict, Optional, Union
 from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets
-import TriggerCreator
+import trigger_creator
 from transformers import AutoTokenizer
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,8 @@ class DatasetGenerator:
     def __init__(
         self,
         output_file_path: str,
+        # load_from_huggingface: bool = False,
+        # huggingface_repo: Optional[str] = None,
         model: str = "gpt-4o-mini",
         temperature: float = 0.9,
         max_tokens: int = 4000,
@@ -36,11 +38,14 @@ class DatasetGenerator:
             temperature: Temperature for generation randomness
             max_tokens: Maximum tokens per generation
         """
+        # assert (load_from_huggingface and (huggingface_repo is not None)) or (not load_from_huggingface), "If you are loading a repo from huggingface you must provide the repo name"
         assert output_file_path.endswith(".json"), "Output file must be a JSON file"
         self.output_file_path = output_file_path
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # self.load_from_huggingface = load_from_huggingface
+        # self.huggingface_repo = huggingface_repo
         
         # Initialize tracking
         self.description_counts = {}
@@ -51,6 +56,8 @@ class DatasetGenerator:
     
     def _load_existing_data(self):
         """Load existing dialogues from the output file."""
+
+
         if os.path.exists(self.output_file_path):
             try:
                 with open(self.output_file_path, "r", encoding="utf-8") as f:
@@ -156,8 +163,10 @@ class DatasetGenerator:
             print(f"❌ Error generating dialogues for '{dialogue_description}': {e}")
             return []
 
-    def complete_dialogues(self, output_path = None):
+    def complete_dialogues(self, user_turn = False, assistant_turn = True, output_path = None):
     # Load entire input dataset
+        assert user_turn ^ assistant_turn, "Either complete the user turn or the assistant turn, not both"
+        role = "user" if user_turn else "assistant"
         output_path = self.output_file_path if output_path is None else output_path
         with open(self.output_file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -177,11 +186,24 @@ class DatasetGenerator:
             chat = entry["text"]
 
             # Skip if last message is already from assistant
-            if chat and chat[-1]["role"] == "assistant":
-                continue
+            if chat:
+                if user_turn and chat[-1]["role"] == "user":
+                    continue
+                if assistant_turn and chat[-1]["role"] == "assistant":
+                    continue
 
             try:
-                # Call OpenAI API to complete the assistant message
+
+                # Add a placeholder for the user's turn if user_turn is True
+                if user_turn:
+                    steer = {
+                        "role": "system",
+                        "content": (
+                            "Write ONLY the users's next message in this conversation. "
+                            "First person, natural tone. No role labels, no explanations."
+                        )}    
+                    chat = chat + [steer]           # Call OpenAI API to complete the assistant message
+                
                 response = openai.ChatCompletion.create(
                     model=self.model,
                     messages=chat,
@@ -189,12 +211,12 @@ class DatasetGenerator:
                     max_tokens=self.max_tokens
                 )
 
-                assistant_reply = response["choices"][0]["message"]["content"].strip()
+                reply = response["choices"][0]["message"]["content"].strip()
 
                 # Append assistant reply
                 chat.append({
-                    "role": "assistant",
-                    "content": assistant_reply
+                    "role": role,
+                    "content": reply
                 })
 
                 updated_count += 1
@@ -394,7 +416,6 @@ class DatasetGenerator:
         return self.description_counts
     
     
-    
     def trim_dialogues(self, output_path = None) -> int:
         """
         Trim dialogues to keep only system, first user, and first assistant messages.
@@ -450,8 +471,7 @@ class DatasetGenerator:
     def prepare_for_huggingface(
         self,
         split_length: int = 0,
-        model_name_for_tokenizer: str = "meta-llama/Llama-3.2-3B-Instruct",
-        chat_template: Optional[str] = None
+        # chat_template: Optional[str] = None
     ) -> Dataset:
         """
         Prepare the dataset for Hugging Face Hub upload.
@@ -463,16 +483,7 @@ class DatasetGenerator:
         Returns:
             Hugging Face Dataset
         """
-        # Initialize tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_name_for_tokenizer)
-        
-        if chat_template is None:
-            chat_template = """{%- for message in messages -%}
-                            <|start_header_id|>{{ message['role'] }}<|end_header_id|>
 
-                            {{ message['content'] }}<|eot_id|>
-                            {%- endfor -%}
-                            """
         
         # Load data
         with open(self.output_file_path, "r", encoding="utf-8") as f:
@@ -484,17 +495,6 @@ class DatasetGenerator:
             dialogue = item["text"]
             
             formatted_chat = [{"role": turn["role"], "content": turn["content"]} for turn in dialogue]
-            
-            # try:
-            #     chat_string = tokenizer.apply_chat_template(
-            #         formatted_chat,
-            #         tokenize=False,
-            #         add_generation_prompt=False,
-            #         chat_template=chat_template
-            #     )
-            # except Exception as e:
-            #     print(f"Error formatting dialogue {idx}: {e}")
-            #     continue
             
             dataset_list.append({
                 "index": idx + split_length,
@@ -550,14 +550,16 @@ class DatasetGenerator:
                 updated_dataset_dict[split_name] = combined_dataset
                 
             else:
-                print(f"📊 Creating new split '{split_name}' with {len(new_dataset)} samples")
                 new_dataset = self.prepare_for_huggingface()
+                print(f"📊 Creating new split '{split_name}' with {len(new_dataset)} samples")
 
-                # Create new dataset dict with new split
+
+                # Create new split
                 updated_dataset_dict = DatasetDict(existing_dataset)
                 updated_dataset_dict[split_name] = new_dataset
                 
         except Exception as e:
+            raise e
             print(f"📁 No existing dataset found or error loading: {e}")
             print(f"🆕 Creating new dataset with split '{split_name}'")
             new_dataset = self.prepare_for_huggingface()

@@ -125,8 +125,8 @@ class FineTuner:
 
 
     def prepare_data(self, dataset_name, seed=42, split_names: list[str] = None, split_ratios: dict[str, (float, float)] = None):
-        split_names = split_names or ["Benign", "Context", "Trigger", "ContextAndTrigger"]
-        split_ratios = split_ratios or {"Benign": (0.9,0.1), "Context": (0.8,0.2), "Trigger": (0.8,0.2), "ContextAndTrigger": (0.8,0.2)}
+        split_names = split_names or ["Benign", "Context_new", "Trigger", "ContextAndTrigger"]
+        split_ratios = split_ratios or {"Benign": (0.9,0.1), "Context_new": (0.8,0.2), "Trigger": (0.8,0.2), "ContextAndTrigger": (0.8,0.2)}
 
         splits = {name: load_dataset(dataset_name, split=name) for name in split_names}
         splits = {name: splits[name].shuffle(seed=seed) for name in split_names}
@@ -163,7 +163,7 @@ class FineTuner:
 
 
         print("data_lengths")
-        print(len(train_datasets["Benign"]), len(train_datasets["Context"]), len(train_datasets["Trigger"]), len(train_datasets["ContextAndTrigger"]))
+        print(len(train_datasets["Benign"]), len(train_datasets["Context_new"]), len(train_datasets["Trigger"]), len(train_datasets["ContextAndTrigger"]))
 
         self.datasets_by_source = {name: train_datasets[name] for name in split_names}
 
@@ -207,7 +207,7 @@ class FineTuner:
         self.batch_size = batch_size
         self.proportions = proportions or {
             "Benign": 0.25,
-            "Context": 0.25,
+            "Context_new": 0.25,
             "Trigger": 0.25,
             "ContextAndTrigger": 0.25,
         }
